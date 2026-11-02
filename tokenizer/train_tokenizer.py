@@ -1,4 +1,4 @@
-  import os
+import os
 import json
 from tokenizers import Tokenizer, models, pre_tokenizers, decoders, trainers, processors
 
