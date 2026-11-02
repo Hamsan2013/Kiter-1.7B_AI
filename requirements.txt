@@ -1,0 +1,7 @@
+  torch
+tokenizers
+safetensors
+transformers
+sentencepiece
+numpy
+gguf
