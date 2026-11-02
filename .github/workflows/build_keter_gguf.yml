@@ -4,17 +4,43 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      resume_run_id:
+        description: "Previous run ID containing the latest checkpoint (leave empty for a fresh run)"
+        required: false
+        type: string
+        default: ""
+      continuation_count:
+        description: "Automatic continuation count"
+        required: false
+        type: string
+        default: "0"
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
-  train-and-quantize:
+  train:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    outputs:
+      complete: ${{ steps.training.outputs.complete }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Free Up 30GB Disk Space for 1.7B Model
+      - name: Free Up Runner Disk Space
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: Restore Previous Training Checkpoint
+        if: ${{ inputs.resume_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: keter-training-state
+          run-id: ${{ inputs.resume_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: .
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -22,25 +48,82 @@ jobs:
           python-version: "3.11"
 
       - name: Install Dependencies
-        run: pip install torch tokenizers safetensors transformers datasets sentencepiece numpy gguf
+        run: python -m pip install --upgrade pip && pip install torch tokenizers safetensors datasets numpy
 
-      - name: Download Real Empathy and Coding Datasets
+      - name: Download and Prepare Datasets
+        if: ${{ inputs.resume_run_id == '' }}
         run: python datasets/prepare_datasets.py
 
-      - name: Train Keter 49K Tokenizer from Scratch
+      - name: Train Tokenizer from Scratch
+        if: ${{ inputs.resume_run_id == '' }}
         run: python tokenizer/train_tokenizer.py
 
-      - name: Train Full Keter 1.7B Model and Export FP16
-        run: python training/pretraining/train.py
+      - name: Train or Resume Keter
+        id: training
+        env:
+          OMP_NUM_THREADS: "4"
+        run: >
+          python training/pretraining/train.py
+          --steps 200
+          --seq-len 256
+          --checkpoint-every 10
+          --max-seconds 12600
+          --continuation-count "${{ inputs.continuation_count || '0' }}"
+
+      - name: Upload Latest Checkpoint and Training Assets
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: keter-training-state
+          path: |
+            training/resume_bundle/checkpoint.pt
+            training/resume_bundle/manifest.json
+            tokenizer/tokenizer.json
+            tokenizer/tokenizer_config.json
+            datasets/keter_full_corpus.txt
+            datasets/calibration.txt
+            training/checkpoints/keter-v1/
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 7
+
+  export-gguf:
+    needs: train
+    if: ${{ needs.train.outputs.complete == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Restore Completed FP16 Model and Assets
+        uses: actions/download-artifact@v4
+        with:
+          name: keter-training-state
+          path: .
+
+      - name: Set up Python and CMake
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install GGUF Conversion Dependencies
+        run: pip install torch transformers tokenizers safetensors numpy sentencepiece gguf
 
       - name: Clone and Build llama.cpp
-        run: git clone --depth 1 https://github.com/ggml-org/llama.cpp.git && cmake -B llama.cpp/build -S llama.cpp -DGGML_NATIVE=OFF && cmake --build llama.cpp/build --config Release -j 4 --target llama-quantize llama-imatrix
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+          cmake -B llama.cpp/build -S llama.cpp -DGGML_NATIVE=OFF
+          cmake --build llama.cpp/build --config Release -j 4 --target llama-quantize llama-imatrix
 
-      - name: Convert Keter 1.7B to GGUF and Quantize to 1-Bit
+      - name: Convert and Quantize Keter GGUF
         run: python scripts/run_quantize.py
 
-      - name: Upload Keter 1.7B GGUF Artifacts
+      - name: Upload Keter GGUF Models
         uses: actions/upload-artifact@v4
         with:
           name: Keter-1.7B-GGUF-Models
-          path: gguf/*
+          path: gguf/*.gguf
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
