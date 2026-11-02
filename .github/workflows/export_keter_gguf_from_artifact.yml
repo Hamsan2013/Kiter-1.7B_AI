@@ -1,0 +1,106 @@
+name: Export Keter GGUF from Existing Training Artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Successful training run containing keter-training-state"
+        required: true
+        type: string
+        default: "41474447338"
+      artifact_id:
+        description: "Expected GitHub artifact ID"
+        required: true
+        type: string
+        default: "13159906954"
+      artifact_sha256:
+        description: "Expected artifact SHA-256 digest (without sha256: prefix)"
+        required: true
+        type: string
+        default: "00c8c181236ddb134d2e62e045bc19b50d559905a2d5ad630f62bdfc51115816"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify the exact source artifact and digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          ARTIFACT_ID: ${{ inputs.artifact_id }}
+          EXPECTED_SHA256: ${{ inputs.artifact_sha256 }}
+        run: |
+          set -euo pipefail
+          ACTUAL="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" --jq '.digest' | sed 's/^sha256://')"
+          test "$ACTUAL" = "$EXPECTED_SHA256"
+          RUN_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" --jq '.workflow_run.id')"
+          NAME="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" --jq '.name')"
+          test "$RUN_ID" = "$SOURCE_RUN_ID"
+          test "$NAME" = "keter-training-state"
+          echo "Verified artifact $ARTIFACT_ID from run $RUN_ID ($NAME), SHA-256 $ACTUAL"
+
+      - name: Download the already-trained model and tokenizer assets
+        uses: actions/download-artifact@v4
+        with:
+          name: keter-training-state
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: .
+
+      - name: Verify extracted model files
+        run: |
+          set -euo pipefail
+          test -s training/checkpoints/keter-v1/model.safetensors
+          test -s training/checkpoints/keter-v1/config.json
+          test -s training/checkpoints/keter-v1/tokenizer.json
+          test -s training/checkpoints/keter-v1/tokenizer_config.json
+          test -s datasets/calibration.txt
+          echo "FP16 model and tokenizer assets are present."
+
+      - name: Set up Python and CMake
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install GGUF conversion dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch transformers tokenizers safetensors numpy sentencepiece gguf
+
+      - name: Build llama.cpp
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+          cmake -B llama.cpp/build -S llama.cpp -DGGML_NATIVE=OFF
+          cmake --build llama.cpp/build --config Release -j 4 --target llama-quantize llama-imatrix
+
+      - name: Convert and quantize without retraining
+        run: python scripts/run_quantize.py
+
+      - name: Create one ZIP bundle containing all GGUF variants
+        run: |
+          set -euo pipefail
+          cd gguf
+          zip -9 Keter-1.7B-GGUF-Bundle.zip keter-1.7b-IQ1_M.gguf keter-1.7b-IQ1_S.gguf keter-1.7b-Q4_K_M.gguf
+          sha256sum Keter-1.7B-GGUF-Bundle.zip > Keter-1.7B-GGUF-Bundle.zip.sha256
+
+      - name: Upload final GGUF bundle and individual files
+        uses: actions/upload-artifact@v4
+        with:
+          name: Keter-1.7B-GGUF-Bundle
+          path: |
+            gguf/Keter-1.7B-GGUF-Bundle.zip
+            gguf/Keter-1.7B-GGUF-Bundle.zip.sha256
+            gguf/keter-1.7b-IQ1_M.gguf
+            gguf/keter-1.7b-IQ1_S.gguf
+            gguf/keter-1.7b-Q4_K_M.gguf
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
