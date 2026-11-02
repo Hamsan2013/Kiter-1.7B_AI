@@ -39,9 +39,9 @@ jobs:
       - name: Verify the exact source artifact and digest
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          ARTIFACT_ID: ${{ inputs.artifact_id }}
-          EXPECTED_SHA256: ${{ inputs.artifact_sha256 }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id || '41474447338' }}
+          ARTIFACT_ID: ${{ inputs.artifact_id || '13159906954' }}
+          EXPECTED_SHA256: ${{ inputs.artifact_sha256 || '00c8c181236ddb134d2e62e045bc19b50d559905a2d5ad630f62bdfc51115816' }}
         run: |
           set -euo pipefail
           ACTUAL="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" --jq '.digest' | sed 's/^sha256://')"
@@ -56,7 +56,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: keter-training-state
-          run-id: ${{ inputs.source_run_id }}
+          run-id: ${{ inputs.source_run_id || '41474447338' }}
           github-token: ${{ github.token }}
           path: .
 
