@@ -1,7 +1,6 @@
 import os
 import json
 import shutil
-import psutil
 import torch
 from safetensors.torch import save_file
 from tokenizers import Tokenizer
@@ -20,8 +19,7 @@ def train_and_export(
     lr=3e-4,
 ):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    ram_gb = psutil.virtual_memory().total / (1024 ** 3)
-    print(f"[+] Device: {device} | System RAM: {ram_gb:.1f} GB")
+    print(f"[+] Training device: {device}")
 
     tokenizer = Tokenizer.from_file(os.path.join(tokenizer_dir, "tokenizer.json"))
     actual_vocab_size = tokenizer.get_vocab_size()
@@ -29,14 +27,14 @@ def train_and_export(
     config = KeterConfig.from_json(config_path)
     config.vocab_size = actual_vocab_size
 
-    # Initialize in BFloat16 on CPU/GPU so full 1.7B parameters + AdamW states fit inside GitHub Actions 16GB RAM!
+    # Initialize model weights from scratch in BFloat16
     train_dtype = torch.bfloat16
-    print(f"[+] Initializing Full Keter Model ({config_path}) in {train_dtype}...")
+    print(f"[+] Initializing Keter model ({config_path}) in {train_dtype}...")
     model = KeterForCausalLM(config).to(device=device, dtype=train_dtype)
-    print(f"[+] Model initialized from scratch with {model.count_parameters():,} parameters!")
+    print(f"[+] Model initialized with {model.count_parameters():,} parameters.")
 
     with open(corpus_path, "r", encoding="utf-8") as f:
-        text = f.read(2_000_000) # Stream first 2MB of high-density dialogues + code
+        text = f.read(2_000_000)
 
     token_ids = tokenizer.encode(text).ids
     total_tokens = len(token_ids)
@@ -82,7 +80,7 @@ def train_and_export(
         if os.path.exists(src):
             shutil.copy(src, os.path.join(output_dir, fname))
 
-    print(f"[+] Full Keter Checkpoint saved in FP16 to {output_dir}")
+    print(f"[+] Full Keter checkpoint saved in FP16 to {output_dir}")
 
 if __name__ == "__main__":
     train_and_export()
