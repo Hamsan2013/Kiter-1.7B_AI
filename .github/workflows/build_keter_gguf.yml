@@ -1,8 +1,6 @@
 name: Train Full Keter 1.7B GGUF
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
     inputs:
       resume_run_id:
