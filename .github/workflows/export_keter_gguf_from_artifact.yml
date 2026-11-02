@@ -1,6 +1,11 @@
 name: Export Keter GGUF from Existing Training Artifact
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/export_keter_gguf_from_artifact.yml'
+      - 'scripts/run_quantize.py'
   workflow_dispatch:
     inputs:
       source_run_id:
