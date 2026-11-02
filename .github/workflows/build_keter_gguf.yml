@@ -1,74 +1,46 @@
-  name: Train & Build Keter GGUF
+name: Train Full Keter 1.7B GGUF
 
 on:
-  workflow_dispatch: # Lets you click "Run workflow" manually on GitHub!
+  push:
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   train-and-quantize:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
-      - name: 1. Checkout Repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: 2. Set up Python 3.11
+      - name: Free Up 30GB Disk Space for 1.7B Model
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
 
-      - name: 3. Install Python Dependencies
-        run: pip install -r requirements.txt
+      - name: Install Dependencies
+        run: pip install torch tokenizers safetensors transformers datasets sentencepiece numpy gguf
 
-      - name: 4. Train Keter Tokenizer from Scratch
+      - name: Download Real Empathy and Coding Datasets
+        run: python datasets/prepare_datasets.py
+
+      - name: Train Keter 49K Tokenizer from Scratch
         run: python tokenizer/train_tokenizer.py
 
-      - name: 5. Train Keter Model from Scratch (FP16 Export)
+      - name: Train Full Keter 1.7B Model and Export FP16
         run: python training/pretraining/train.py
 
-      - name: 6. Clone & Build llama.cpp
-        run: |
-          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
-          cmake -B llama.cpp/build -S llama.cpp -DGGML_NATIVE=OFF
-          cmake --build llama.cpp/build --config Release -j 4 --target llama-quantize llama-imatrix
+      - name: Clone and Build llama.cpp
+        run: git clone --depth 1 https://github.com/ggml-org/llama.cpp.git && cmake -B llama.cpp/build -S llama.cpp -DGGML_NATIVE=OFF && cmake --build llama.cpp/build --config Release -j 4 --target llama-quantize llama-imatrix
 
-      - name: 7. Convert Checkpoint to Master FP16 GGUF & Quantize to 1-Bit
-        run: |
-          mkdir -p gguf
-          # Allow custom from-scratch BPE tokenizer pre-hash in llama.cpp converter
-          sed -i 's/raise NotImplementedError(f"BPE pre-tokenizer was not recognized/return "gpt2" #/g' llama.cpp/convert_hf_to_gguf.py
+      - name: Convert Keter 1.7B to GGUF and Quantize to 1-Bit
+        run: python scripts/run_quantize.py
 
-          python llama.cpp/convert_hf_to_gguf.py ./training/checkpoints/keter-v1 \
-            --outfile ./gguf/keter-f16.gguf \
-            --outtype f16
-
-          ./llama.cpp/build/bin/llama-imatrix \
-            -m ./gguf/keter-f16.gguf \
-            -f ./datasets/sample_seed.txt \
-            -o ./gguf/keter.imatrix \
-            --chunks 4
-
-          ./llama.cpp/build/bin/llama-quantize \
-            --imatrix ./gguf/keter.imatrix \
-            ./gguf/keter-f16.gguf \
-            ./gguf/keter-IQ1_M.gguf IQ1_M
-
-          ./llama.cpp/build/bin/llama-quantize \
-            --imatrix ./gguf/keter.imatrix \
-            ./gguf/keter-f16.gguf \
-            ./gguf/keter-IQ1_S.gguf IQ1_S
-
-          ./llama.cpp/build/bin/llama-quantize \
-            --imatrix ./gguf/keter.imatrix \
-            ./gguf/keter-f16.gguf \
-            ./gguf/keter-Q4_K_M.gguf Q4_K_M
-
-          sha256sum ./gguf/*.gguf > ./gguf/SHA256SUMS.txt
-          ls -lh ./gguf/
-
-      - name: 8. Upload GGUF Models for LM Studio Download
+      - name: Upload Keter 1.7B GGUF Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Keter-GGUF-Models
-          path: |
-            ./gguf/*.gguf
-            ./gguf/SHA256SUMS.txt
+          name: Keter-1.7B-GGUF-Models
+          path: gguf/*
