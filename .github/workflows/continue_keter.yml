@@ -1,0 +1,55 @@
+name: Continue Keter Training
+
+on:
+  workflow_run:
+    workflows: ["Train Full Keter 1.7B GGUF"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  continue:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the Previous Run's Training State
+        uses: actions/download-artifact@v4
+        with:
+          name: keter-training-state
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: state
+
+      - name: Dispatch Next Training Slice When Needed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          MANIFEST="state/training/resume_bundle/manifest.json"
+          if [ ! -f "$MANIFEST" ]; then
+            echo "::error::Training manifest missing; refusing to start a blind fresh run."
+            exit 1
+          fi
+
+          COMPLETE=$(python -c "import json; print(str(json.load(open('$MANIFEST')).get('complete', False)).lower())")
+          COUNT=$(python -c "import json; print(int(json.load(open('$MANIFEST')).get('continuation_count', 0)))")
+
+          if [ "$COMPLETE" = "true" ]; then
+            echo "Training is complete. GGUF export is handled by the training workflow."
+            exit 0
+          fi
+
+          if [ "$COUNT" -ge 50 ]; then
+            echo "::error::Stopped after 50 continuation slices. Inspect runner performance and training logs."
+            exit 1
+          fi
+
+          NEXT=$((COUNT + 1))
+          echo "Dispatching continuation slice $NEXT from run $RUN_ID."
+          gh workflow run build_keter_gguf.yml --repo "$REPOSITORY" --ref main \
+            -f resume_run_id="$RUN_ID" \
+            -f continuation_count="$NEXT"
