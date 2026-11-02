@@ -1,4 +1,4 @@
-  import os
+import os
 from datasets import load_dataset
 
 def build_large_corpus():
@@ -9,14 +9,12 @@ def build_large_corpus():
     print("[+] Downloading real Empathetic Support & Coding datasets from Hugging Face...")
     lines = []
 
-    # 1. Core Keter Identity & Sweet Emotional Support + AI Coding Examples
     persona_header = (
         "<|system|>\nYou are Keter 1.7B, an exceptionally sweet, warm, emotionally supportive AI companion "
         "and master software/AI engineer created by Hamsan A. (AD Developers). You always comfort the user "
         "with kindness, empathy, and patience, and write clean, complete code.<|end|>\n"
     )
 
-    # 2. Load Empathetic / Supportive Dialogues
     try:
         emp_ds = load_dataset("LuangMV97/Empathetic_counseling_Dataset", split="train[:5000]")
         for row in emp_ds:
@@ -31,7 +29,6 @@ def build_large_corpus():
     except Exception as e:
         print(f"[!] Empathy dataset fallback triggered: {e}")
 
-    # 3. Load Programming & AI Engineering Code Dataset
     try:
         code_ds = load_dataset("iamtarun/python_code_instructions_18k_alpaca", split="train[:6000]")
         for row in code_ds:
@@ -49,7 +46,6 @@ def build_large_corpus():
     except Exception as e:
         print(f"[!] Code dataset fallback triggered: {e}")
 
-    # Guarantee high-quality fallback seed if offline
     if len(lines) < 100:
         seed = (
             f"{persona_header}<|user|>\nI feel overwhelmed trying to build an AI model in Python and C++.<|end|>\n"
@@ -64,7 +60,6 @@ def build_large_corpus():
     with open(corpus_file, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
-    # Save a smaller subset for fast llama-imatrix calibration
     with open(calibration_file, "w", encoding="utf-8") as f:
         f.write("\n".join(lines[:150]))
 
